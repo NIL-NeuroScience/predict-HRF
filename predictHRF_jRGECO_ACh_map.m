@@ -1,13 +1,21 @@
 clear all
-% load hemodynamics, ACh, and jRGECOa1 data
-load('run0002_greenFP.mat', 'led_475_sm_norm_HD')
-GRAB = led_475_sm_norm_HD;
-load('run0002_hemodynamics.mat', 'HbT')
-load('run0002_redFP.mat', 'led_590_sm_norm_HD')
-jRGECO = led_590_sm_norm_HD;
+root = '/projectnb/devorlab/nfominth/2023/mesoscope/23-01-25/Thy1_0110/processed/';
+root_trigger = '/projectnb/devorlab/nfominth/2023/mesoscope/23-01-25/Thy1_0110/';
+data_in = '/projectnb/devorlab/nfominth/2023/mesoscope/23-01-25/Thy1_0110/';
+
+Run = 3;
+rfp_norm=h5read(sprintf('%s%srun%04i.h5',root,filesep,Run),'/rfp/norm');
+gfp_normHD=h5read(sprintf('%s%srun%04i.h5',root,filesep,Run),'/gfp/normHD');
+HbO=h5read(sprintf('%s%srun%04i.h5',root,filesep,Run),'/hemodynamics/HbO');
+HbR=h5read(sprintf('%s%srun%04i.h5',root,filesep,Run),'/hemodynamics/Hb');
+HbT=HbR+HbO;
+load([root_trigger filesep 'Triggers' filesep sprintf('Run%03i.mat',Run)]);
+load([data_in 'dataIn.mat']); 
+jRGECO= rfp_norm;
+GRAB = gfp_normHD;
 
 % Save results in this folder
-folder_to_save = 'C:\Users\Sreekanth\Documents\Projects\IRF\Predict HRF\Results\jRGECOonlyMaP\';
+folder_to_save = '/projectnb/devorlab/skura/HRF/Analysis/run_3_230125';
 if ~isfolder(folder_to_save)
     mkdir(folder_to_save); 
 end
@@ -17,9 +25,94 @@ fontsize =20; % font size on figures
 ratio = [2.5 1 1]; % figures aspect to save images
 
 %  load a single image to display location of the seed
-img = imread('C:\Users\Sreekanth\Documents\Projects\IRF\Data\Meso_211112_NM07\run02_X1002.tif');
-figure; colormap('gray'); imagesc(img);
+img = dataIn(3).template;
+img = img(:,:,1);
 
+% Detrend GRAB and Ach signals. They have some decay in signal, in  the
+% future this will be fixed on the acquistion side
+figure; colormap('gray'); imagesc(img);
+for u = 1:size(GRAB,1)
+    for v = 1:size(GRAB,2)
+        GRAB(u,v,:) = detrend(squeeze(GRAB(u,v,:)),2);
+    end
+end
+
+for u = 1:size(jRGECO,1)
+    for v = 1:size(jRGECO,2)
+        jRGECO(u,v,:) = detrend(squeeze(jRGECO(u,v,:)),2);
+    end
+end
+
+
+%select brain mask. 
+brain_mask = zeros(size(img));
+h = msgbox(' Please select one side of the brain region');
+uiwait(h)
+figure; colormap('gray');
+while(1)
+    imagesc(img);
+    [brain_mask1,Xi1,Yi1] = roipoly;
+    hold on;
+    plot(Xi1,Yi1,'color','k');
+    hold off;
+    button = questdlg('Are you statisfied with ROI');
+    if strcmp(button, 'Yes')
+      break;
+    end
+end
+h = msgbox(' Please select other side of the brain region');
+uiwait(h)
+while(1)
+    imagesc(img); hold on;
+    plot(Xi1,Yi1,'color','k');
+    hold off;
+    [brain_mask2,Xi2,Yi2] = roipoly;
+    hold on;
+    plot(Xi2,Yi2,'color','k');
+    hold off;
+    button = questdlg('Are you statisfied with ROI');
+    if strcmp(button, 'Yes')
+      break;
+    end
+end
+imagesc(img); hold on;
+plot(Xi1,Yi1,'color','k');
+plot(Xi2,Yi2,'color','k');
+hold off;
+brain_mask(brain_mask1==1) = 1;
+brain_mask(brain_mask2==1) = 1;
+
+save([folder_to_save filesep 'brain_mask.mat'],'brain_mask1','Xi1','Yi1','brain_mask2','Xi2','Yi2','brain_mask')
+
+% Apply global mean regression. I am commenting this just in case if we
+% want to use this.
+% [nX,nY,nT] = size(HbT);
+% brainIdx = find(brain_mask == 1);
+% 
+% yAll = reshape(HbT(:,:,:),[nY*nX,nT]);
+% y1 = yAll(brainIdx,:);
+% yMean = mean(y1,1);
+% a = pinv(yMean*yMean')*yMean*y1';
+% ynew = y1'-yMean'*a;
+% HbT_new = zeros(nY*nX,nT);
+% HbT_new(brainIdx,:) = ynew';
+% HbT = reshape(HbT_new,[nX nY nT]);
+% 
+% yAll = reshape(jRGECO(:,:,:),[nY*nX,nT]);
+% y1 = yAll(brainIdx,:);
+% yMean = mean(y1,1);
+% a = pinv(yMean*yMean')*yMean*y1';
+% ynew = y1'-yMean'*a;
+% jRGECO_new = zeros(nY*nX,nT);
+% jRGECO_new(brainIdx,:) = ynew';
+% jRGECO = reshape(jRGECO_new,[nX nY nT]);
+for u = 1:size(HbT,3)
+    HbT(:,:,u) = HbT(:,:,u).*brain_mask;
+end
+
+for u = 1:size(jRGECO,3)
+    jRGECO(:,:,u) = jRGECO(:,:,u).*brain_mask;
+end
 % Experimental parameters for modified alpha function
 t0 =    0.1774;
 tau1 =  0.4289;
@@ -27,7 +120,7 @@ tau2 =  0.4279;
 A =     -805.5;
 B =     808.3;
 
-sr = 7; % frequency of the HbT, ACh, and jRGECO
+sr = 10; % frequency of the HbT, ACh, and jRGECO
 hrf_l = 5; % Length of the IRF
 t_hrf = (0:floor(hrf_l*sr)-1)/sr; % time points
 
@@ -35,8 +128,8 @@ t_hrf = (0:floor(hrf_l*sr)-1)/sr; % time points
 [hrf, hrf1, hrf2] = modified_alpha_hrf_2(t0,tau1,tau2,A,B,sr,hrf_l);
 figure; plot(t_hrf,hrf); 
 
-size_x = size(HbT,1);
-size_y = size(HbT,2);
+size_x = round(size(HbT,1)/3);
+size_y = round(size(HbT,2)/3);
 
 % store correlation map and moving correlation volumes
 img1 = zeros(size_x,size_y);
@@ -53,8 +146,8 @@ for u = 1:size_x
     u
     for v = 1:size_y
         
-        x_pt = u;
-        y_pt = v;
+        x_pt = 1+3*(u-1);
+        y_pt = 1+3*(v-1);
         
         % temporal smooth
         jRGECO_smoothed = smooth(squeeze(mean(mean(jRGECO(x_pt-seed_size:x_pt+seed_size,y_pt-seed_size:y_pt+seed_size,:)*5,1),2)));
@@ -73,9 +166,10 @@ for u = 1:size_x
             R = R(2);
             img1(u,v) = R;
             
+            n_steps = 300;
             % Find moving correlation between HbT and predcited HbT
-            time_step = length(HbTavg_smoothed)/85;
-            for w = 1:85
+            time_step = length(HbTavg_smoothed)/n_steps;
+            for w = 1:n_steps
                 t_start = floor(1+time_step*(w-1));
                 t_end = min(floor(t_start+sr*30),length(HbTavg_smoothed));
                 R = corrcoef(HbTavg_smoothed(t_start:t_end),conv_result(t_start:t_end));
@@ -91,7 +185,7 @@ for u = 1:size_x
             R = R(2);
             img2(u,v) = R;
             
-            for w = 1:85
+            for w = 1:n_steps
                 t_start = floor(1+time_step*(w-1));
                 t_end = min(floor(t_start+sr*30),length(HbTavg_smoothed));
                 R = corrcoef(HbT_highpass(t_start:t_end),conv_result(t_start:t_end));
@@ -112,8 +206,8 @@ for u = 1:size_x
             img3(u,v) = R;
             
             % Find moving correlation between HbT and predcited HbT
-            time_step = length(HbTavg_smoothed)/85;
-            for w = 1:85
+            time_step = length(HbTavg_smoothed)/n_steps;
+            for w = 1:n_steps
                 t_start = floor(1+time_step*(w-1));
                 t_end = min(floor(t_start+sr*30),length(HbTavg_smoothed));
                 R = corrcoef(HbTavg_smoothed(t_start:t_end),conv_result(t_start:t_end));
@@ -128,7 +222,7 @@ for u = 1:size_x
             R = R(2);
             img4(u,v) = R;
             
-            for w = 1:85
+            for w = 1:n_steps
                 t_start = floor(1+time_step*(w-1));
                 t_end = min(floor(t_start+sr*30),length(HbTavg_smoothed));
                 R = corrcoef(HbT_highpass(t_start:t_end),conv_result(t_start:t_end));
